@@ -8,6 +8,8 @@ with warnings.catch_warnings():
 
 import time
 import argparse
+import threading
+import logging
 
 import os
 import subprocess
@@ -15,6 +17,13 @@ from dotenv import load_dotenv
 
 from predicto import get_digits
 from predictc import get_prediction_data
+
+logging.basicConfig(
+    filename="app.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+logging.info("Logging new session ==============================================================")
 
 # set up the expected command line arguments
 parser = argparse.ArgumentParser(description='Predict/Recognize the year on a class ring image.')
@@ -157,25 +166,23 @@ while True:
             print("confused state")
             break
 
-        # print("predicting: " + img_path)
+        logging.info(f"predicting: {img_path}")
         output["img_path"] = img_path
 
-        # predict using custom model
-        custom_prediction_data = get_prediction_data(learner, img_path)        
+        thread1 = threading.Thread(target=get_prediction_data, args=(learner, img_path, output))
+        thread2 = threading.Thread(target=get_digits, args=(prompt, img_path, output))
 
-        # write those results to output
-        output["custom_model"] = custom_prediction_data["pred"]
+        logging.info(f"before threads started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-        output["top_all_classes"] = custom_prediction_data["top_all"]
-        output["top_2_digit_classes"] = custom_prediction_data["top_2_digit"]
-        output["top_1_digit_classes"] = custom_prediction_data["top_1_digit"]
+        thread1.start()
+        thread2.start()
 
-        # predict using openails -l
-        p = get_digits(prompt, img_path)
-        pred_year = p['pred']
+        thread1.join()
+        thread2.join()
 
-        # wriet that result to output
-        output["open_ai"] = pred_year
+        logging.info(f"after threads joined: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        logging.info(f"output: {output}")
 
         # print(output if debug is on)
         if args.debug:

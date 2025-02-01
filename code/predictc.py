@@ -18,7 +18,7 @@ def get_top_classes_by_confidence(df, top_x):
     top_classes = df.nlargest(top_x, 'confidence')
     return dict(zip(top_classes['class'], top_classes['confidence']))
 
-def get_prediction_data(learner, img_path):
+def get_prediction_data(learner, img_path, output):
   # predict classes for the image, suppressing progress output
   with learner.no_bar():
     x = learner.predict(img_path)
@@ -53,4 +53,11 @@ def get_prediction_data(learner, img_path):
       "top_2_digit": top_2_digit,
       "top_1_digit": top_1_digit
   }
+
+  output["custom_model"] = highest_conf_class
+
+  output["top_all_classes"] = top_all
+  output["top_2_digit_classes"] = top_2_digit
+  output["top_1_digit_classes"] = top_1_digit 
+
   return pred_results

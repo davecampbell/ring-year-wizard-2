@@ -2,7 +2,7 @@ import openai
 import base64
 import json
 
-def get_digits(prompt, image_path):
+def get_digits(prompt, image_path, output):
   with open(image_path, "rb") as image_file:
     image_data = image_file.read()
     
@@ -23,5 +23,6 @@ def get_digits(prompt, image_path):
   # print(response.choices[0].message.content)
   json_string = response.choices[0].message.content
   digits = json.loads(json_string)
-  return digits
+  output["open_ai"] = digits["pred"]
+  return
 
