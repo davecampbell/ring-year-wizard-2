@@ -10,6 +10,7 @@ import time
 import argparse
 import threading
 import logging
+import hashlib
 
 import os
 import subprocess
@@ -115,6 +116,17 @@ def custom_labeller(fname):
 # the monkey-patch
 globals()['custom_labeller'] = custom_labeller
 
+# hashing routine used to tell if the image is the same as the previous image
+# if so, don't burn the API tokens on a prediction
+def get_image_hash(image_path, algorithm="md5"):
+    """Compute hash of an image file using the specified hashing algorithm."""
+    hasher = hashlib.new(algorithm)
+    with open(image_path, "rb") as f:
+        while chunk := f.read(4096):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 load_dotenv('.env')
 
 # folder locations
@@ -136,6 +148,9 @@ Return the 2 digits as a single string and in json format \
 using the key of 'pred', with no other text, not even the text 'json'.\
 like this:  {"pred":55}
 """
+
+# initialize
+last_image_hash = None
 
 while True:
 
@@ -166,29 +181,40 @@ while True:
             print("confused state")
             break
 
-        logging.info(f"predicting: {img_path}")
-        output["img_path"] = img_path
+        # get image hash
+        current_image_hash = get_image_hash(img_path)
+        
+        if current_image_hash != last_image_hash:
 
-        thread1 = threading.Thread(target=get_prediction_data, args=(learner, img_path, output))
-        thread2 = threading.Thread(target=get_digits, args=(prompt, img_path, output))
+            logging.info(f"predicting: {img_path}")
+            output["img_path"] = img_path
 
-        logging.info(f"before threads started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            thread1 = threading.Thread(target=get_prediction_data, args=(learner, img_path, output))
+            thread2 = threading.Thread(target=get_digits, args=(prompt, img_path, output))
 
-        thread1.start()
-        thread2.start()
+            logging.info(f"before threads started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-        thread1.join()
-        thread2.join()
+            thread1.start()
+            thread2.start()
 
-        logging.info(f"after threads joined: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            thread1.join()
+            thread2.join()
 
-        logging.info(f"output: {output}")
+            logging.info(f"after threads joined: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-        # print(output if debug is on)
-        if args.debug:
-            print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            print("CAN PRINT OUT MORE STUFF HERE")
+            logging.info(f"output: {output}")
 
-        # write the output to a file
-        with open(output_path, "w") as file:
-            json.dump(output, file, indent=4)  # `indent` makes the JSON more readable
+            # print(output if debug is on)
+            if args.debug:
+                print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                print("CAN PRINT OUT MORE STUFF HERE")
+
+            # write the output to a file
+            with open(output_path, "w") as file:
+                json.dump(output, file, indent=4)  # `indent` makes the JSON more readable
+
+            last_image_hash = current_image_hash
+
+        else:
+            logging.info(f"same image - sleeping 5 seconds...")
+            time.sleep(5)
