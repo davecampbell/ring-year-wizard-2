@@ -19,8 +19,11 @@ from dotenv import load_dotenv
 from predicto import get_digits
 from predictc import get_prediction_data
 
+now = datetime.now()
+formatted_datetime = now.strftime('%Y%m%d%H%M%S')
+
 logging.basicConfig(
-    filename="app.log",
+    filename="logs/app-" + formatted_datetime + ".log",
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
