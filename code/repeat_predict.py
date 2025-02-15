@@ -15,9 +15,13 @@ import hashlib
 import os
 import subprocess
 from dotenv import load_dotenv
+import cv2
 
 from predicto import get_digits
+from predicto_2 import get_digits as get_digits_2
 from predictc import get_prediction_data
+from predictc_2 import get_prediction_data as get_prediction_data_2
+from image_utils import flip_vertically, ellipsify
 
 now = datetime.now()
 formatted_datetime = now.strftime('%Y%m%d%H%M%S')
@@ -56,12 +60,20 @@ num_args = sum(
         1 for arg in vars(args).values() if arg not in (None, False)
     )
 
+def is_image(file_path):
+    # List of valid image extensions
+    valid_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']
+    # Get the file extension
+    file_extension = os.path.splitext(file_path)[1].lower()
+    return file_extension in valid_extensions
+
 # function to pick a random file from a folder
 # if there is only one, it will return it
 def pick_random_file(folder_path):
+
     try:
-        # Get a list of all files in the folder
-        files = [f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f))]
+        # Get a list of all image files in the folder
+        files = [f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f)) and is_image(f)]
         if not files:
             # print("No files found in the folder.")
             return None
@@ -144,12 +156,36 @@ custom_model_path = os.getenv("CUSTOM_MODEL_PATH")
 learner = load_learner(custom_model_path)
 
 prompt = """
-In the center of an oval are a digit then a tree with leaves to the top then a digit.\
-Determine the 2 digits on either side of the tree.\
-Be sure not to mistake the trunk of the tree for a digit.\
-Return the 2 digits as a single string and in json format \
-using the key of 'pred', with no other text, not even the text 'json'.\
-like this:  {"pred":55}
+These 2 monochrome images are the same image, flipped vertically. \
+Be sure to look at both images before analyzing. \
+The first task is to determine which image is upright. \
+There is a large C and a tree in the image to help decide \
+which image is upright. \
+In the upright image, the C will be open to the right and the tree will have \
+a trunk pointing down and leaves and branches pointing up. \
+In the flipped image, the C will be open to the left and the tree will have \
+a trunk pointing up and leaves and branches pointing down. \
+First, decide which image is upright, then use that image to do the next step. \
+If the first image is the upright image, set 'up_pic' = 0.\
+If the second image is the upright image, set 'up_pic' = 1.\
+If neither image shows a C and a tree, return the number '39' in the normal \
+format and set 'lefty' = 'Y' and 'righty' = 'Z'. \
+Within the middle of the 'C' in the upright image are three symbols - \
+left-to-right - a digit (0-9) we are calling 'lefty' then a tree symbol, then \
+a digit (0-9) we are calling 'righty'. \
+The most important task is to determine 'lefty; and 'righty' on either side of \
+the tree symbol. \
+the digit symbols may be blotchy, they are engraved.  try hard to determine the \
+digit symbols.\
+store the digit to the left of the tree trunk as 'lefty' and the digit to \
+the right of the tree trunk as 'righty'. \
+if there is confusion about 'lefty' and 'righty', set it to 'X' but you must \
+return an answer. \
+In all cases, you must return an answer in the proper format, no excpetions. \
+Return the results ('lefty', right' and 'up_pic') like this: \
+{"lefty": '5', "righty":'7', "up_pic":1} \
+and no other text, not even the text 'json'. \
+You must return an answer formatted like this EVERY TIME. /
 """
 
 # initialize
@@ -172,8 +208,7 @@ while True:
             folder_path = 'images/look/'
             img = pick_random_file(folder_path)
             while img is None:
-                # print(f"no image in {folder_path} - sleeping 5 seconds...")
-                # time.sleep(5)
+                time.sleep(1)
                 img = pick_random_file(folder_path)
             img_path = folder_path + img
 
@@ -192,8 +227,15 @@ while True:
             logging.info(f"predicting: {img_path}")
             output["img_path"] = img_path
 
-            thread1 = threading.Thread(target=get_prediction_data, args=(learner, img_path, output))
-            thread2 = threading.Thread(target=get_digits, args=(prompt, img_path, output))
+            # pre-process image
+            img = cv2.imread(img_path)
+            e_img = ellipsify(img)
+            cv2.imwrite("images/tmp/e_img.jpg", e_img)
+            flip_img = flip_vertically(e_img)
+            cv2.imwrite("images/tmp/flip_img.jpg", flip_img)
+
+            thread1 = threading.Thread(target=get_prediction_data, args=(learner, "images/tmp/e_img.jpg", output))
+            thread2 = threading.Thread(target=get_digits_2, args=(prompt, ("images/tmp/e_img.jpg", "images/tmp/flip_img.jpg"), output))
 
             logging.info(f"before threads started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -204,6 +246,17 @@ while True:
             thread2.join()
 
             logging.info(f"after threads joined: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+            # pipeline to use openai to determine the UPRIGHT image, then pass that image to custom model
+            openai_output = get_digits_2(prompt, ("images/tmp/e_img.jpg", "images/tmp/flip_img.jpg"), output)
+            if openai_output["up_pic"] == 0:
+                img_path = "images/tmp/e_img.jpg"
+            elif openai_output["up_pic"] == 1:
+                img_path = "images/tmp/flip_img.jpg"
+
+            upright_results = get_prediction_data_2(learner, img_path, output)
+
+            output["upright_custom"] = upright_results
 
             logging.info(f"output: {output}")
 
