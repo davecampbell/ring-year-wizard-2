@@ -1,7 +1,11 @@
 FROM continuumio/miniconda3:latest
 
-RUN conda install fastai::fastai && \
-    conda install openai && \
+RUN conda update -n base -c defaults conda && \
+    conda install -c conda-forge -c fastai -y fastai
+
+RUN pip install opencv-python-headless
+
+RUN conda install -c conda-forge openai && \
     conda install python-dotenv && \
     conda clean -afy
 
