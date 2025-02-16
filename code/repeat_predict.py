@@ -44,7 +44,15 @@ parser.add_argument(
 parser.add_argument(
     "-m", "--mode",
     type=str,
+    default="look",
     help='The mode of running this program. Options: "random" or "look".'
+)
+
+parser.add_argument(
+    "-p", "--path",
+    type=str,
+    default="serial",
+    help='Dual-model processing path. Options: "serial" or "parallel".'
 )
 
 parser.add_argument(
@@ -234,40 +242,61 @@ while True:
             flip_img = flip_vertically(e_img)
             cv2.imwrite("images/tmp/flip_img.jpg", flip_img)
 
-            thread1 = threading.Thread(target=get_prediction_data, args=(learner, "images/tmp/e_img.jpg", output))
-            thread2 = threading.Thread(target=get_digits_2, args=(prompt, ("images/tmp/e_img.jpg", "images/tmp/flip_img.jpg"), output))
+            if args.path == 'parallel':
 
-            logging.info(f"before threads started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                thread1 = threading.Thread(target=get_prediction_data, args=(learner, "images/tmp/e_img.jpg", output))
+                thread2 = threading.Thread(target=get_digits_2, args=(prompt, ("images/tmp/e_img.jpg", "images/tmp/flip_img.jpg"), output))
 
-            thread1.start()
-            thread2.start()
+                before = datetime.now()
 
-            thread1.join()
-            thread2.join()
+                thread1.start()
+                thread2.start()
 
-            logging.info(f"after threads joined: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                thread1.join()
+                thread2.join()
 
-            # pipeline to use openai to determine the UPRIGHT image, then pass that image to custom model
-            openai_output = get_digits_2(prompt, ("images/tmp/e_img.jpg", "images/tmp/flip_img.jpg"), output)
-            if openai_output["up_pic"] == 0:
-                img_path = "images/tmp/e_img.jpg"
-            elif openai_output["up_pic"] == 1:
-                img_path = "images/tmp/flip_img.jpg"
+                after = datetime.now()
+                logging.info(f"parallel time: {after - before}")
 
-            upright_results = get_prediction_data_2(learner, img_path, output)
+                output["parallel_time"] = (after - before).total_seconds()
 
-            output["upright_custom"] = upright_results
 
+            if args.path == 'serial':
+
+                # pipeline to use openai to first determine the UPRIGHT image (and predict), then pass that image to custom model
+                before = datetime.now()
+
+                openai_output = get_digits_2(prompt, ("images/tmp/e_img.jpg", "images/tmp/flip_img.jpg"), output)
+
+                if openai_output["up_pic"] == 0:
+                    img_path = "images/tmp/e_img.jpg"
+                elif openai_output["up_pic"] == 1:
+                    img_path = "images/tmp/flip_img.jpg"
+
+                upright_results = get_prediction_data_2(learner, img_path, output)
+
+                after = datetime.now()
+                logging.info(f"serial time: {(after - before)}")
+
+                output["upright_custom"] = upright_results
+                output["serial_time"] = (after - before).total_seconds()
+
+            # write the output
+            # to the log
             logging.info(f"output: {output}")
 
-            # print(output if debug is on)
+            # to a file
+            with open(output_path, "w") as file:
+                json.dump(output, file, indent=4)  # `indent` makes the JSON more readable
+
+            # to the console
+            print(f"\n{output}\n")
+
+            # extra debug output (if debug is on)
             if args.debug:
                 print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                 print("CAN PRINT OUT MORE STUFF HERE")
 
-            # write the output to a file
-            with open(output_path, "w") as file:
-                json.dump(output, file, indent=4)  # `indent` makes the JSON more readable
 
             last_image_hash = current_image_hash
 
