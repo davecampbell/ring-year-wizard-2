@@ -1,6 +1,7 @@
 import cv2
 import math
 import numpy as np
+import logging
 
 def masked_ellipse(img, ellipse):
   mask = np.zeros(img.shape[:2], dtype=np.uint8)
