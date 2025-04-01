@@ -1,11 +1,3 @@
-import warnings
-
-# this suppresses from warnings about torchvision
-with warnings.catch_warnings():
-    warnings.filterwarnings("ignore")
-    from fastai.vision.all import *
-    import torch
-
 import time
 import argparse
 import threading
@@ -16,12 +8,10 @@ import os
 import subprocess
 from dotenv import load_dotenv
 import cv2
+from datetime import datetime
+import random
 
 from predicto import get_digits
-from predicto_2 import get_digits as get_digits_2
-from predictc import get_prediction_data
-from predictc_2 import get_prediction_data as get_prediction_data_2
-from image_utils import flip_vertically, ellipsify
 
 now = datetime.now()
 formatted_datetime = now.strftime('%Y%m%d%H%M%S')
@@ -51,8 +41,8 @@ parser.add_argument(
 parser.add_argument(
     "-p", "--path",
     type=str,
-    default="serial",
-    help='Dual-model processing path. Options: "serial" or "parallel".'
+    default="chatgpt",
+    help='prediction execution path. Options: "chatgpt"'
 )
 
 parser.add_argument(
@@ -119,26 +109,6 @@ def is_file_open(file_path):
         # print(f"Error checking file with lsof: {e}")
         return False
 
-def year_from_name(fname):
-    pattern = r'(?<=\d{2})\d{2}(?=_)'
-    digits = re.search(pattern, str(fname)).group()
-    return digits
-
-# this is a custom function that was used in the datablock of the learner
-# need to define it here so it can be monkey-patched into the model after
-# the exported version
-def custom_labeller(fname):
-    # Assuming filenames are like "classX_imageY.jpg"
-    # return fname.name.split('_')[0]  # Extract class name based on your logic
-    pattern = r'(?<=\d{2})\d{2}(?=_)'
-    digits = re.search(pattern, str(fname)).group()
-    klasses = list(digits)
-    klasses.append(digits)
-    return klasses
-
-# the monkey-patch
-globals()['custom_labeller'] = custom_labeller
-
 # hashing routine used to tell if the image is the same as the previous image
 # if so, don't burn the API tokens on a prediction
 def get_image_hash(image_path, algorithm="md5"):
@@ -158,43 +128,6 @@ look_folder_path = os.getenv("LOOK_FOLDER_PATH")
 output_path = os.getenv("OUTPUT_PATH")
 flag_file_path = os.getenv("FLAG_FILE_PATH")
 
-custom_model_path = os.getenv("CUSTOM_MODEL_PATH")
-
-# Load the custom model
-learner = load_learner(custom_model_path)
-
-prompt = """
-These 2 monochrome images are the same image, flipped vertically. \
-Be sure to look at both images before analyzing. \
-The first task is to determine which image is upright. \
-There is a large C and a tree in the image to help decide \
-which image is upright. \
-In the upright image, the C will be open to the right and the tree will have \
-a trunk pointing down and leaves and branches pointing up. \
-In the flipped image, the C will be open to the left and the tree will have \
-a trunk pointing up and leaves and branches pointing down. \
-First, decide which image is upright, then use that image to do the next step. \
-If the first image is the upright image, set 'up_pic' = 0.\
-If the second image is the upright image, set 'up_pic' = 1.\
-If neither image shows a C and a tree, return the number '39' in the normal \
-format and set 'lefty' = 'Y' and 'righty' = 'Z'. \
-Within the middle of the 'C' in the upright image are three symbols - \
-left-to-right - a digit (0-9) we are calling 'lefty' then a tree symbol, then \
-a digit (0-9) we are calling 'righty'. \
-The most important task is to determine 'lefty; and 'righty' on either side of \
-the tree symbol. \
-the digit symbols may be blotchy, they are engraved.  try hard to determine the \
-digit symbols.\
-store the digit to the left of the tree trunk as 'lefty' and the digit to \
-the right of the tree trunk as 'righty'. \
-if there is confusion about 'lefty' and 'righty', set it to 'X' but you must \
-return an answer. \
-In all cases, you must return an answer in the proper format, no excpetions. \
-Return the results ('lefty', right' and 'up_pic') like this: \
-{"lefty": '5', "righty":'7', "up_pic":1} \
-and no other text, not even the text 'json'. \
-You must return an answer formatted like this EVERY TIME. /
-"""
 
 # initialize
 last_image_hash = None
@@ -237,60 +170,57 @@ while True:
 
             # pre-process image
             img = cv2.imread(img_path)
-            e_img = ellipsify(img)
-            cv2.imwrite("images/tmp/e_img.jpg", e_img)
-            flip_img = flip_vertically(e_img)
-            cv2.imwrite("images/tmp/flip_img.jpg", flip_img)
+            # make grayscale
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-            if args.path == 'parallel':
+            prompts = [None, None]
 
-                thread1 = threading.Thread(target=get_prediction_data, args=(learner, "images/tmp/e_img.jpg", output))
-                thread2 = threading.Thread(target=get_digits_2, args=(prompt, ("images/tmp/e_img.jpg", "images/tmp/flip_img.jpg"), output))
+            prompts[0] = """
+Analyze this image of a ring. Use the palmetto tree at the center as the reference for orientation. The tree is upright if the branches are above the trunk.\
+First, determine the orientation of the image using the tree. Return "orient": 1 if the image is upright, "orient": 0 if flipped.\
+Then, interpret the two single digits on either side of the tree trunk as they would appear in an upright image. If the image is flipped, rotate each digit 180° before interpreting.\
+Be sure to not mistake the tree trunk for a digit.\
+There is a single digit character then a tree trunk then a single digit character.\
+Your result will be a string with 2 characters.\
+Return your result as JSON using:\
+"orient" for orientation, and "pred" for the final digit string.\
+Example format: {"orient": 1, "pred": "57"}\
+Return only the JSON formatted as above, no other text like 'json'.\
+Never return any other text, especially 'json'.
+"""
+
+            prompts[1] =  """
+Analyze this image of a ring.\
+Interpret the two digits beside the tree, one digit character on each side of the tree trunk.\
+Be sure to not mistake the tree trunk for a digit.\
+There is a single digit character then a tree trunk then a single digit character.\
+Your result will be a string with 2 characters.\
+Return your result as JSON using "pred" for the digit string.\
+Example format: {"pred": "57"}\
+Return only the JSON, no other text like 'json'.\
+Never return any other text, especially 'json'.
+"""
+
+
+            if args.path == 'chatgpt':
+
+                # pipeline to first ask ChatGPT if the image is upright or not, then predict on that image if upright,
+                # or a flipped image if not upright
 
                 before = datetime.now()
 
-                thread1.start()
-                thread2.start()
-
-                thread1.join()
-                thread2.join()
+                digits = get_digits(prompts, img)
 
                 after = datetime.now()
-                logging.info(f"parallel time: {after - before}")
-
-                output["parallel_time"] = (after - before).total_seconds()
-
-
-            if args.path == 'serial':
-
-                # pipeline to use openai to first determine the UPRIGHT image (and predict), then pass that image to custom model
-                before = datetime.now()
-
-                openai_output = get_digits_2(prompt, ("images/tmp/e_img.jpg", "images/tmp/flip_img.jpg"), output)
-
-                if openai_output["up_pic"] == 0:
-                    img_path = "images/tmp/e_img.jpg"
-                elif openai_output["up_pic"] == 1:
-                    img_path = "images/tmp/flip_img.jpg"
-
-                upright_results = get_prediction_data_2(learner, img_path, output)
-
-                after = datetime.now()
-                logging.info(f"serial time: {(after - before)}")
-
-                output["upright_custom"] = upright_results
-                output["serial_time"] = (after - before).total_seconds()
-
-            # write the output
-            # to the log
-            logging.info(f"output: {output}")
+                logging.info(f"chatgpt time: {after - before}")
+                print(f"chatgpt time: {after - before}")
 
             # to a file
-            with open(output_path, "w") as file:
-                json.dump(output, file, indent=4)  # `indent` makes the JSON more readable
+            # with open(output_path, "w") as file:
+            #    json.dump(output, file, indent=4)  # `indent` makes the JSON more readable
 
             # to the console
-            print(f"\n{output}\n")
+            print(f"\n{digits}\n")
 
             # extra debug output (if debug is on)
             if args.debug:
